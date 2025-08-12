@@ -1,61 +1,57 @@
 package com.akumaya.clientes24.web;
 
 import com.akumaya.clientes24.search.ClienteDoc;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.SearchHit;
-import org.springframework.data.elasticsearch.core.SearchHits;
-import org.springframework.data.elasticsearch.core.query.Criteria;
-import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
-import org.springframework.data.elasticsearch.core.query.Query;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.query.Criteria;
+import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
+import org.springframework.web.bind.annotation.*;
 
-
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/clientes")
 public class ClienteSearchController {
 
-    private final ElasticsearchOperations esOps;
+    @Autowired
+    private ElasticsearchOperations esOps;
 
-    public ClienteSearchController(ElasticsearchOperations esOps) {
-        this.esOps = esOps;
-    }
+    // Campos permitidos para ordenar
+    private static final Map<String, String> ALLOWED_SORTS = Map.of(
+            "horaRegistro", "horaRegistro",
+            "edadHijo", "edadHijo",
+            "ciudad", "ciudad",
+            "departamento", "departamento"
+    );
 
-    @GetMapping("/search")
-    public SearchResponse<ClienteDoc> search(
-            @RequestParam(required = false) String q,
-            @RequestParam(required = false) String ciudad,
-            @RequestParam(required = false) String departamento,
-            @RequestParam(required = false) Integer edadMin,
-            @RequestParam(required = false) Integer edadMax,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String sort
-    ) {
-        Criteria criteria = new Criteria(); // empieza vacío
+    // --------------------------
+    // Construcción de Criteria
+    // --------------------------
+    private Criteria buildCriteria(String q, String ciudad, String departamento,
+                                   Integer edadMin, Integer edadMax,
+                                   String fechaDesde, String fechaHasta) {
+        Criteria criteria = new Criteria();
 
-        // full‑text: matches en varias fields
         if (q != null && !q.isBlank()) {
             Criteria texto = new Criteria("nombreTutor").matches(q)
                     .or(new Criteria("nombreHijo").matches(q))
                     .or(new Criteria("comoNosConocio").matches(q));
             criteria = criteria.and(texto);
         }
-
-        // filtros exactos
         if (ciudad != null && !ciudad.isBlank()) {
-            criteria = criteria.and(new Criteria("ciudad.keyword").is(ciudad));
+            criteria = criteria.and(new Criteria("ciudad").is(ciudad));
         }
         if (departamento != null && !departamento.isBlank()) {
-            criteria = criteria.and(new Criteria("departamento.keyword").is(departamento));
+            criteria = criteria.and(new Criteria("departamento").is(departamento));
         }
-
-        // rangos
         if (edadMin != null) {
             criteria = criteria.and(new Criteria("edadHijo").greaterThanEqual(edadMin));
         }
@@ -63,44 +59,138 @@ public class ClienteSearchController {
             criteria = criteria.and(new Criteria("edadHijo").lessThanEqual(edadMax));
         }
 
-        Sort sortObj = resolveSort(sort);
-        Pageable pageable = (sortObj == null)
-                ? PageRequest.of(page, size, Sort.by(Sort.Order.desc("horaRegistro"))) // por defecto: más recientes
-                : PageRequest.of(page, size, sortObj);
+        if (fechaDesde != null && !fechaDesde.isBlank()) {
+            var from = LocalDate.parse(fechaDesde).atStartOfDay().atOffset(ZoneOffset.UTC);
+            criteria = criteria.and(new Criteria("horaRegistro").greaterThanEqual(from));
+        }
+        if (fechaHasta != null && !fechaHasta.isBlank()) {
+            var to = LocalDate.parse(fechaHasta).plusDays(1).atStartOfDay().atOffset(ZoneOffset.UTC);
+            criteria = criteria.and(new Criteria("horaRegistro").lessThan(to));
+        }
 
-        Query query = new CriteriaQuery(criteria);
-        query.setPageable(pageable);
-
-        // 3) Ejecutar búsqueda
-        SearchHits<ClienteDoc> hits = esOps.search(query, ClienteDoc.class);
-        List<ClienteDoc> items = hits.stream().map(SearchHit::getContent).toList();
-        long total = hits.getTotalHits();
-
-        return new SearchResponse<ClienteDoc>(items, page, size, total);
-
+        return criteria;
     }
-
-    // Permitir ordenar por campos seguros (mapeados en ClienteDoc)
-    private static final Map<String, String> ALLOWED_SORTS = Map.of(
-            "horaRegistro", "horaRegistro",
-            "edadHijo", "edadHijo",
-            "ciudad", "ciudad",               // ya es Keyword en el documento
-            "departamento", "departamento"    // Keyword
-    );
 
     private Sort resolveSort(String sortParam) {
         if (sortParam == null || sortParam.isBlank()) return null;
-        String[] parts = sortParam.split(",", 2);
-        String field = parts[0].trim();
-        String dir = (parts.length > 1 ? parts[1].trim().toLowerCase() : "asc");
-
-        String mapped = ALLOWED_SORTS.get(field);
-        if (mapped == null) return null; // ignora campos no permitidos
-
-        return "desc".equals(dir)
-                ? Sort.by(Sort.Order.desc(mapped))
-                : Sort.by(Sort.Order.asc(mapped));
+        var parts = sortParam.split(",", 2);
+        var field = parts[0].trim();
+        var dir = (parts.length > 1 ? parts[1].trim().toLowerCase() : "asc");
+        var mapped = ALLOWED_SORTS.get(field);
+        if (mapped == null) return null;
+        return "desc".equals(dir) ? Sort.by(Sort.Order.desc(mapped)) : Sort.by(Sort.Order.asc(mapped));
     }
 
+    // --------------------------
+    // Endpoint de búsqueda con facets opcionales
+    // --------------------------
+    @GetMapping("/search")
+    public SearchResponse<ClienteDoc> search(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String ciudad,
+            @RequestParam(required = false) String departamento,
+            @RequestParam(required = false) Integer edadMin,
+            @RequestParam(required = false) Integer edadMax,
+            @RequestParam(required = false) String fechaDesde,
+            @RequestParam(required = false) String fechaHasta,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String sort,
+            @RequestParam(defaultValue = "false") boolean includeFacets
+    ) {
+        var criteria = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
 
+        var sortObj = resolveSort(sort);
+        Pageable pageable = (sortObj == null)
+                ? PageRequest.of(page, size, Sort.by(Sort.Order.desc("horaRegistro")))
+                : PageRequest.of(page, size, sortObj);
+
+        var query = new CriteriaQuery(criteria);
+        query.setPageable(pageable);
+
+        var hits = esOps.search(query, ClienteDoc.class);
+        var items = hits.stream().map(SearchHit::getContent).toList();
+        var total = hits.getTotalHits();
+
+        if (!includeFacets) {
+            return new SearchResponse<>(items, page, size, total);
+        }
+
+        // facets contextuales: misma criteria pero sin paginación
+        var qFacets = new CriteriaQuery(criteria);
+        qFacets.setPageable(PageRequest.of(0, 10_000));
+        var all = esOps.search(qFacets, ClienteDoc.class).stream()
+                .map(SearchHit::getContent).toList();
+
+        var facets = computeFacets(all, total);
+        return new SearchResponse<>(items, page, size, total, facets);
+    }
+
+    // --------------------------
+    // Endpoint solo de facets contextuales
+    // --------------------------
+    @GetMapping("/facets")
+    public FacetsResponse facets(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String ciudad,
+            @RequestParam(required = false) String departamento,
+            @RequestParam(required = false) Integer edadMin,
+            @RequestParam(required = false) Integer edadMax,
+            @RequestParam(required = false) String fechaDesde,
+            @RequestParam(required = false) String fechaHasta
+    ) {
+        var criteria = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
+        var qy = new CriteriaQuery(criteria);
+        qy.setPageable(PageRequest.of(0, 10_000));
+
+        var hits = esOps.search(qy, ClienteDoc.class);
+        var docs = hits.stream().map(SearchHit::getContent).toList();
+        return computeFacets(docs, hits.getTotalHits());
+    }
+
+    // --------------------------
+    // Cálculo de facets
+    // --------------------------
+    private FacetsResponse computeFacets(List<ClienteDoc> docs, long total) {
+        var byCiudad = docs.stream().map(ClienteDoc::getCiudad)
+                .filter(s -> s != null && !s.isBlank())
+                .collect(Collectors.groupingBy(s -> s, Collectors.counting()));
+
+        var byDepto = docs.stream().map(ClienteDoc::getDepartamento)
+                .filter(s -> s != null && !s.isBlank())
+                .collect(Collectors.groupingBy(s -> s, Collectors.counting()));
+
+        var byEdadBucket = docs.stream().map(ClienteDoc::getEdadHijo)
+                .filter(e -> e != null && e >= 0)
+                .map(this::bucketEdad)
+                .collect(Collectors.groupingBy(s -> s, Collectors.counting()));
+
+        var ciudades = byCiudad.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(20)
+                .map(e -> new FacetEntry(e.getKey(), e.getValue()))
+                .toList();
+
+        var departamentos = byDepto.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(20)
+                .map(e -> new FacetEntry(e.getKey(), e.getValue()))
+                .toList();
+
+        var ordenEdades = List.of("0-6", "7-9", "10-12", "13-17", "18+");
+        var edades = ordenEdades.stream()
+                .map(label -> new FacetEntry(label, byEdadBucket.getOrDefault(label, 0L)))
+                .toList();
+
+        return new FacetsResponse(ciudades, departamentos, edades, total);
+    }
+
+    private String bucketEdad(Integer e) {
+        if (e == null) return null;
+        if (e <= 6) return "0-6";
+        if (e <= 9) return "7-9";
+        if (e <= 12) return "10-12";
+        if (e <= 17) return "13-17";
+        return "18+";
+    }
 }
