@@ -7,8 +7,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.query.Criteria;
 import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
+import org.springframework.data.elasticsearch.core.query.StringQuery;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -41,9 +43,10 @@ public class ClienteSearchController {
         Criteria criteria = new Criteria();
 
         if (q != null && !q.isBlank()) {
-            Criteria texto = new Criteria("nombreTutor").matches(q)
-                    .or(new Criteria("nombreHijo").matches(q))
-                    .or(new Criteria("comoNosConocio").matches(q));
+            // Para facetas, usar contains en lugar de fuzzy para mejor rendimiento
+            Criteria texto = new Criteria("nombreTutor").contains(q)
+                    .or(new Criteria("nombreHijo").contains(q))
+                    .or(new Criteria("comoNosConocio").contains(q));
             criteria = criteria.and(texto);
         }
         if (ciudad != null && !ciudad.isBlank()) {
@@ -98,17 +101,34 @@ public class ClienteSearchController {
             @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "false") boolean includeFacets
     ) {
-        var criteria = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
-
         var sortObj = resolveSort(sort);
         Pageable pageable = (sortObj == null)
                 ? PageRequest.of(page, size, Sort.by(Sort.Order.desc("horaRegistro")))
                 : PageRequest.of(page, size, sortObj);
 
-        var query = new CriteriaQuery(criteria);
-        query.setPageable(pageable);
-
-        var hits = esOps.search(query, ClienteDoc.class);
+        SearchHits<ClienteDoc> hits;
+        
+        if (q != null && !q.isBlank()) {
+            // Usar StringQuery para búsqueda de texto simple
+            String queryJson = String.format("""
+                {
+                  "multi_match": {
+                    "query": "%s",
+                    "fields": ["nombreTutor", "nombreHijo", "comoNosConocio"]
+                  }
+                }
+                """, q.replace("\"", "\\\""));
+                
+            var query = new StringQuery(queryJson);
+            query.setPageable(pageable);
+            hits = esOps.search(query, ClienteDoc.class);
+        } else {
+            // Usar consulta de criteria para filtros sin texto
+            var criteria = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
+            var query = new CriteriaQuery(criteria);
+            query.setPageable(pageable);
+            hits = esOps.search(query, ClienteDoc.class);
+        }
         var items = hits.stream().map(SearchHit::getContent).toList();
         var total = hits.getTotalHits();
 
@@ -116,8 +136,9 @@ public class ClienteSearchController {
             return new SearchResponse<>(items, page, size, total);
         }
 
-        // facets contextuales: misma criteria pero sin paginación
-        var qFacets = new CriteriaQuery(criteria);
+        // facets contextuales: construir criteria para facetas
+        var criteriaForFacets = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
+        var qFacets = new CriteriaQuery(criteriaForFacets);
         qFacets.setPageable(PageRequest.of(0, 10_000));
         var all = esOps.search(qFacets, ClienteDoc.class).stream()
                 .map(SearchHit::getContent).toList();
