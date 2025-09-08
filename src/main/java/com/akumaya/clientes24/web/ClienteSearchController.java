@@ -37,7 +37,7 @@ public class ClienteSearchController {
     // --------------------------
     // Construcción de Criteria
     // --------------------------
-    private Criteria buildCriteria(String q, String ciudad, String departamento,
+    private Criteria buildCriteria(String q, String nombreHijo, String ciudad, String departamento,
                                    Integer edadMin, Integer edadMax,
                                    String fechaDesde, String fechaHasta) {
         Criteria criteria = new Criteria();
@@ -48,6 +48,9 @@ public class ClienteSearchController {
                     .or(new Criteria("nombreHijo").contains(q))
                     .or(new Criteria("comoNosConocio").contains(q));
             criteria = criteria.and(texto);
+        }
+        if (nombreHijo != null && !nombreHijo.isBlank()) {
+            criteria = criteria.and(new Criteria("nombreHijo").contains(nombreHijo));
         }
         if (ciudad != null && !ciudad.isBlank()) {
             criteria = criteria.and(new Criteria("ciudad").is(ciudad));
@@ -90,6 +93,7 @@ public class ClienteSearchController {
     @GetMapping("/search")
     public SearchResponse<ClienteDoc> search(
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) String nombreHijo,
             @RequestParam(required = false) String ciudad,
             @RequestParam(required = false) String departamento,
             @RequestParam(required = false) Integer edadMin,
@@ -123,8 +127,8 @@ public class ClienteSearchController {
             query.setPageable(pageable);
             hits = esOps.search(query, ClienteDoc.class);
         } else {
-            // Usar consulta de criteria para filtros sin texto
-            var criteria = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
+            // Usar consulta de criteria para filtros
+            var criteria = buildCriteria(q, nombreHijo, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
             var query = new CriteriaQuery(criteria);
             query.setPageable(pageable);
             hits = esOps.search(query, ClienteDoc.class);
@@ -137,7 +141,7 @@ public class ClienteSearchController {
         }
 
         // facets contextuales: construir criteria para facetas
-        var criteriaForFacets = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
+        var criteriaForFacets = buildCriteria(q, nombreHijo, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
         var qFacets = new CriteriaQuery(criteriaForFacets);
         qFacets.setPageable(PageRequest.of(0, 10_000));
         var all = esOps.search(qFacets, ClienteDoc.class).stream()
@@ -153,6 +157,7 @@ public class ClienteSearchController {
     @GetMapping("/facets")
     public FacetsResponse facets(
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) String nombreHijo,
             @RequestParam(required = false) String ciudad,
             @RequestParam(required = false) String departamento,
             @RequestParam(required = false) Integer edadMin,
@@ -160,7 +165,7 @@ public class ClienteSearchController {
             @RequestParam(required = false) String fechaDesde,
             @RequestParam(required = false) String fechaHasta
     ) {
-        var criteria = buildCriteria(q, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
+        var criteria = buildCriteria(q, nombreHijo, ciudad, departamento, edadMin, edadMax, fechaDesde, fechaHasta);
         var qy = new CriteriaQuery(criteria);
         qy.setPageable(PageRequest.of(0, 10_000));
 

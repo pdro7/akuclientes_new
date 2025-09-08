@@ -1,0 +1,79 @@
+# Changes Log - Clientes AKU
+
+## Fecha: 2025-09-08
+
+### Funcionalidad Agregada: Búsqueda Específica por Campo nombreHijo
+
+**Contexto:**
+Se implementó funcionalidad para permitir búsqueda específica en el campo `nombreHijo` a través de parámetros URL, separada de la búsqueda general de texto.
+
+**Cambios Realizados:**
+
+### 1. ClienteSearchController.java
+**Archivo:** `src/main/java/com/akumaya/clientes24/web/ClienteSearchController.java`
+
+#### Modificaciones en endpoint `/api/clientes/search` (línea 93):
+- **AGREGADO:** Nuevo parámetro `nombreHijo` como `@RequestParam(required = false)`
+- **PROPÓSITO:** Permite búsqueda específica en el campo nombre del hijo
+
+#### Modificaciones en método `buildCriteria()` (línea 40):
+- **MODIFICADO:** Firma del método para incluir parámetro `nombreHijo`
+- **AGREGADO:** Lógica de filtrado específico para nombreHijo (líneas 52-54):
+  ```java
+  if (nombreHijo != null && !nombreHijo.isBlank()) {
+      criteria = criteria.and(new Criteria("nombreHijo").contains(nombreHijo));
+  }
+  ```
+
+#### Modificaciones en endpoint `/api/clientes/facets` (línea 160):
+- **AGREGADO:** Parámetro `nombreHijo` para mantener consistencia con el endpoint principal
+
+#### Actualizaciones en llamadas a métodos:
+- **MODIFICADAS:** Todas las llamadas a `buildCriteria()` actualizadas con el nuevo parámetro
+- **LÍNEAS AFECTADAS:** 131, 144, 168
+
+### 2. Configuración del Entorno
+**Inicialización del Proyecto:**
+- Instalación de dependencias Maven: `./mvnw dependency:resolve`
+- Configuración de servicios Docker (PostgreSQL + Elasticsearch)
+- Arranque de aplicación Spring Boot con perfil local
+
+**Servicios Configurados:**
+- PostgreSQL: puerto 5432, base de datos "akumaya"
+- Elasticsearch: puerto 9200, configuración single-node
+- Spring Boot: puerto 8080
+
+### Funcionalidad Resultante
+
+**Antes:** Solo búsqueda general de texto que buscaba en múltiples campos simultáneamente
+**Después:** 
+- Búsqueda general preservada (parámetro `q`)
+- Nueva búsqueda específica por nombreHijo (parámetro `nombreHijo`)
+- Ambas funcionalidades pueden combinarse
+
+**Ejemplos de Uso:**
+```bash
+# Búsqueda específica por nombreHijo
+GET /api/clientes/search?nombreHijo=Emanuel
+
+# Búsqueda combinada
+GET /api/clientes/search?q=texto&nombreHijo=Emanuel&ciudad=Bogotá
+
+# Búsqueda general (sin cambios)
+GET /api/clientes/search?q=Emanuel
+```
+
+### Compatibilidad
+- ✅ **Backward Compatible:** Toda funcionalidad existente preservada
+- ✅ **No Breaking Changes:** API existente funciona sin modificaciones
+- ✅ **Progressive Enhancement:** Nueva funcionalidad opcional
+
+### Estado del Proyecto
+- **Aplicación:** Ejecutándose correctamente en puerto 8080
+- **Base de Datos:** PostgreSQL conectada y funcional
+- **Elasticsearch:** Operativo en puerto 9200
+- **Testing:** Pendiente verificación de nueva funcionalidad
+
+---
+**Desarrollado por:** Claude Code Assistant
+**Versión:** Spring Boot 3.5.4, Java 17
